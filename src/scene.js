@@ -422,6 +422,18 @@ function buildVeranda() {
     p.castShadow = true;
     group.add(p);
   }
+  // Plaster panel between the lintel and the eaves.
+  const kokabe = new THREE.Mesh(new THREE.BoxGeometry(len, 0.7, 0.08), new THREE.MeshStandardMaterial({ color: 0xd9d2c3, roughness: 0.95 }));
+  kokabe.position.set(cx, G.verandaFloorY + 3.0, G.verandaBackZ + 0.02);
+  group.add(kokabe);
+
+  // The hall turns the corner at each end of the veranda.
+  for (const x of [cx - len / 2 + 0.05, cx + len / 2 - 0.05]) {
+    const end = new THREE.Mesh(new THREE.BoxGeometry(0.1, 2.75, depth + 0.2), wallMat);
+    end.position.set(x, G.verandaFloorY + 1.37, (G.verandaEdgeZ + G.verandaBackZ) / 2);
+    end.castShadow = true;
+    group.add(end);
+  }
   // A lintel above the shoji.
   const lintel = new THREE.Mesh(new THREE.BoxGeometry(len, 0.5, 0.15), pillarMat);
   lintel.position.set(cx, G.verandaFloorY + 2.55, G.verandaBackZ - 0.02);

@@ -1,6 +1,6 @@
 (function (RJ) {
 'use strict';
-const { GARDEN, VIEW, STONES, GROUP_COUNT, buildIslands, Gravel, RAKE_SPACING, RAKE_TINES, buildStoneMeshes, buildMoss, buildWalls, buildPebbles, buildVeranda, buildTrees, buildSky, seasonFor, solarPosition, skyDirection, lightAt, presetDate, PRESETS, PRESET_LABEL, kyotoClock, Soundscape } = RJ;
+const { GARDEN, VIEW, STONES, GROUP_COUNT, buildIslands, islandDistance, Gravel, RAKE_SPACING, RAKE_TINES, buildStoneMeshes, buildMoss, buildWalls, buildPebbles, buildVeranda, buildTrees, buildSky, seasonFor, solarPosition, skyDirection, lightAt, presetDate, PRESETS, PRESET_LABEL, kyotoClock, Soundscape } = RJ;
 
 const params = new URLSearchParams(location.search);
 const store = {
@@ -128,138 +128,205 @@ function setLight(name, announce = true) {
 // ---------------------------------------------------------------------------
 // The visitor
 // ---------------------------------------------------------------------------
+// You can be on the veranda boards or out on the gravel. You can sit only on
+// the veranda. Walls bound the garden, and the moss beds are not to be
+// walked on.
+const BODY = 0.24;               // keep this far from moss and walls (m)
+const VERANDA = { x0: -2.7, x1: 27.7, z0: GARDEN.verandaEdgeZ + 0.06, z1: GARDEN.verandaBackZ - 0.3 };
+const YARD = { x0: BODY, x1: GARDEN.width - BODY, z0: -GARDEN.depth + BODY, z1: GARDEN.verandaEdgeZ + 0.3 };
+const SEATED_EYE = VIEW.seatedEye - GARDEN.verandaFloorY;     // above the boards
+const STANDING_EYE = VIEW.standingEye - GARDEN.verandaFloorY; // above whatever you stand on
+const WALK = 1.15, RAKE_WALK = 0.55;                          // m/s
+const STRIDE = 0.72;                                          // m between footsteps
+
+function onVeranda(x, z) {
+  return x > VERANDA.x0 && x < VERANDA.x1 && z >= GARDEN.verandaEdgeZ && z < VERANDA.z1;
+}
+function groundAt(x, z) { return onVeranda(x, z) ? GARDEN.verandaFloorY : 0; }
+function walkable(x, z) {
+  const inV = x > VERANDA.x0 && x < VERANDA.x1 && z > VERANDA.z0 && z < VERANDA.z1;
+  const inY = x > YARD.x0 && x < YARD.x1 && z > YARD.z0 && z < YARD.z1;
+  if (!inV && !inY) return false;
+  if (!inV) for (const isl of islands) if (islandDistance(isl, x, z) < BODY) return false;
+  return true;
+}
+
+// Start where the URL says, or seated where you last sat on the veranda.
+const savedX = clamp(Number(store.get('x', 12.6)) || 12.6, VIEW.xMin, VIEW.xMax);
+let startX = Number(params.get('x') ?? savedX), startZ = Number(params.get('z') ?? VIEW.seatZ);
+if (!walkable(startX, startZ)) { startX = savedX; startZ = VIEW.seatZ; }
 const me = {
-  x: clamp(Number(params.get('x') ?? store.get('x', 12.6)), VIEW.xMin, VIEW.xMax),
-  vx: 0,
+  x: startX,
+  z: startZ,
+  vf: 0, vs: 0,                 // forward and sideways speed
   yaw: Number(params.get('yaw') ?? 0) * Math.PI / 180,
   pitch: Number(params.get('pitch') ?? -9) * Math.PI / 180,
   yawT: 0, pitchT: 0,
-  stand: params.has('stand') ? 1 : 0,
-  lastMove: -1e9,
+  seated: !params.has('stand'),
+  rise: params.has('stand') ? 1 : 0,   // 0 seated … 1 standing
+  ground: 0,
   bob: 0,
+  stepDist: 0,
 };
+me.seated = me.seated && onVeranda(me.x, me.z);
+me.rise = me.seated ? 0 : 1;
+me.ground = groundAt(me.x, me.z);
 me.yawT = me.yaw; me.pitchT = me.pitch;
 const keys = new Set();
-let walkDir = 0;     // touch buttons
-let wheelV = 0;
+const pad = { f: 0, s: 0 };     // touch d-pad
 
-function updateVisitor(dt, now) {
-  let desired = 0;
-  if (keys.has('ArrowLeft') || keys.has('KeyA')) desired -= 1;
-  if (keys.has('ArrowRight') || keys.has('KeyD')) desired += 1;
-  desired = desired * 1.0 + walkDir * 1.0 + wheelV;
-  wheelV *= Math.exp(-dt * 2.5);
-  if (Math.abs(wheelV) < 0.01) wheelV = 0;
+function sit() {
+  if (me.seated) { me.seated = false; toast('Standing'); refreshButtons(); return; }
+  if (!onVeranda(me.x, me.z)) { toast('Step back onto the veranda to sit'); return; }
+  me.seated = true;
+  me.vf = me.vs = 0;
+  toast('Sitting');
+  refreshButtons();
+}
 
-  if (Math.abs(desired) > 0.02) me.lastMove = now;
-  const wantStand = params.has('stand') || now - me.lastMove < 1.3 ? 1 : 0;
-  // Rising is quicker than settling back down onto the boards.
-  const rate = wantStand > me.stand ? 1 / 0.75 : 1 / 1.4;
-  me.stand = clamp(me.stand + Math.sign(wantStand - me.stand) * rate * dt, 0, 1);
+function updateVisitor(dt) {
+  let f = 0, sd = 0;
+  if (keys.has('KeyW')) f += 1;
+  if (keys.has('KeyS')) f -= 1;
+  if (keys.has('KeyD')) sd += 1;
+  if (keys.has('KeyA')) sd -= 1;
+  f += pad.f; sd += pad.s;
+  const len = Math.hypot(f, sd);
+  if (len > 1) { f /= len; sd /= len; }
 
-  // You stand up before you walk.
-  const canWalk = clamp((me.stand - 0.6) / 0.4, 0, 1);
-  const v = desired * canWalk;
-  me.vx += (v - me.vx) * Math.min(1, dt * 3.5);
-  me.x += me.vx * dt;
-  if (me.x < VIEW.xMin || me.x > VIEW.xMax) { me.x = clamp(me.x, VIEW.xMin, VIEW.xMax); me.vx = 0; }
-  me.bob += Math.abs(me.vx) * dt * 5.2;
+  // Starting to walk while seated means getting up first.
+  if (me.seated && len > 0) { me.seated = false; refreshButtons(); }
+  const rate = me.seated ? 1 / 1.3 : 1 / 0.7;   // settle slowly, rise briskly
+  me.rise = clamp(me.rise + (me.seated ? -1 : 1) * rate * dt, 0, 1);
+  const canWalk = clamp((me.rise - 0.65) / 0.35, 0, 1);
 
-  if (keys.has('ArrowUp') || keys.has('KeyW')) me.pitchT += dt * 0.6;
-  if (keys.has('ArrowDown') || keys.has('KeyS')) me.pitchT -= dt * 0.6;
-  me.yawT = clamp(me.yawT, -1.45, 1.45);
-  me.pitchT = clamp(me.pitchT, -0.75, 0.42);
-  me.yaw += (me.yawT - me.yaw) * Math.min(1, dt * 9);
-  me.pitch += (me.pitchT - me.pitch) * Math.min(1, dt * 9);
+  const speed = (raking && rake.down ? RAKE_WALK : WALK) * canWalk;
+  const k = Math.min(1, dt * 6);
+  me.vf += (f * speed - me.vf) * k;
+  me.vs += (sd * speed - me.vs) * k;
 
-  const s = smooth(me.stand);
-  const eye = VIEW.seatedEye + (VIEW.standingEye - VIEW.seatedEye) * s + Math.sin(me.bob) * 0.012 * Math.min(1, Math.abs(me.vx));
-  camera.position.set(me.x, eye, VIEW.seatZ + 0.12 * s);
+  // Turning with the arrow keys; looking up and down.
+  if (keys.has('ArrowLeft')) me.yawT += dt * 1.6;
+  if (keys.has('ArrowRight')) me.yawT -= dt * 1.6;
+  if (keys.has('ArrowUp')) me.pitchT += dt * 0.9;
+  if (keys.has('ArrowDown')) me.pitchT -= dt * 0.9;
+  me.pitchT = clamp(me.pitchT, -1.35, 1.2);
+  const turn = Math.min(1, dt * 10);
+  me.yaw += (me.yawT - me.yaw) * turn;
+  me.pitch += (me.pitchT - me.pitch) * turn;
+
+  // Move, sliding along whatever stops you.
+  const fx = -Math.sin(me.yaw), fz = -Math.cos(me.yaw);
+  const rx = Math.cos(me.yaw), rz = -Math.sin(me.yaw);
+  const dx = (fx * me.vf + rx * me.vs) * dt, dz = (fz * me.vf + rz * me.vs) * dt;
+  const ox = me.x, oz = me.z;
+  if (walkable(me.x + dx, me.z)) me.x += dx;
+  if (walkable(me.x, me.z + dz)) me.z += dz;
+  const moved = Math.hypot(me.x - ox, me.z - oz);
+
+  // Stepping down to the gravel, or up onto the boards.
+  const g = groundAt(me.x, me.z);
+  if (Math.abs(g - me.ground) > 0.3 && moved > 0) sound.step(g > me.ground ? 'wood' : 'gravel', 1.3);
+  me.ground += (g - me.ground) * Math.min(1, dt * (g < me.ground ? 9 : 7));
+
+  // Footsteps: no footprints, but you hear every one.
+  if (!me.seated && me.rise > 0.9) {
+    me.stepDist += moved;
+    if (me.stepDist > STRIDE) {
+      me.stepDist -= STRIDE;
+      sound.step(onVeranda(me.x, me.z) ? 'wood' : 'gravel', 0.7 + 0.4 * Math.min(1, moved / dt / WALK));
+    }
+  }
+  if (moved < 1e-4) me.stepDist = Math.min(me.stepDist, STRIDE * 0.6);
+  me.bob += moved * 8.7;
+
+  const r = smooth(me.rise);
+  const eyeH = SEATED_EYE + (STANDING_EYE - SEATED_EYE) * r;
+  const bob = Math.sin(me.bob) * 0.014 * Math.min(1, moved / Math.max(dt, 1e-3) / WALK);
+  camera.position.set(me.x, me.ground + eyeH + bob, me.z);
   camera.rotation.set(me.pitch, me.yaw, 0);
 }
 
 // ---------------------------------------------------------------------------
 // The rake
 // ---------------------------------------------------------------------------
+// The rake is in your hands: its head rests on the ground a couple of metres
+// in front of you, across your line of sight. Hold the mouse button (or the
+// space bar) to lower it into the gravel, then walk or turn to draw lines.
 let raking = params.has('rake');
-const rake = { active: false, tx: 0, tz: 0, hx: 0, hz: 0, dx: 0, dz: -1, speed: 0, hover: false };
-const raycaster = new THREE.Raycaster();
-const pickables = [gravel.mesh, moss, ...stoneMeshes, veranda];
+const REACH = 1.9;
+const rake = {
+  down: false, mouse: false, lift: 0.14,
+  x: 0, z: 0, ux: 1, uz: 0, has: false,
+};
 
-const rakeGhost = (() => {
+const rakeModel = (() => {
   const g = new THREE.Group();
-  const W = RAKE_TINES * RAKE_SPACING;
-  const wood = new THREE.MeshStandardMaterial({ color: 0x8a6a4a, roughness: 0.8, transparent: true, opacity: 0.92 });
-  const bar = new THREE.Mesh(new THREE.BoxGeometry(W + 0.06, 0.035, 0.04), wood);
-  bar.position.y = 0.07;
-  g.add(bar);
+  const W = (RAKE_TINES - 1) * RAKE_SPACING + 0.12;
+  const wood = new THREE.MeshStandardMaterial({ color: 0x8a6a4a, roughness: 0.8 });
+  const head = new THREE.Group();
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(W, 0.04, 0.05), wood);
+  bar.position.y = 0.075;
+  head.add(bar);
   for (let i = 0; i < RAKE_TINES; i++) {
-    const tine = new THREE.Mesh(new THREE.BoxGeometry(0.018, 0.07, 0.018), wood);
-    tine.position.set(-W / 2 + RAKE_SPACING * (i + 0.5), 0.03, 0);
-    g.add(tine);
+    const tine = new THREE.Mesh(new THREE.BoxGeometry(0.02, 0.08, 0.02), wood);
+    tine.position.set((i - (RAKE_TINES - 1) / 2) * RAKE_SPACING, 0.03, 0);
+    head.add(tine);
   }
-  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.014, 0.014, 1.7, 8), wood);
-  handle.geometry.translate(0, 0.85, 0);
-  handle.rotation.x = -1.05; // leaning back towards whoever holds it
-  handle.position.y = 0.08;
+  g.add(head);
+  const handle = new THREE.Mesh(new THREE.CylinderGeometry(0.016, 0.016, 1, 8), wood);
   g.add(handle);
+  g.traverse((o) => { o.castShadow = true; o.receiveShadow = true; });
   g.visible = false;
   scene.add(g);
-  return g;
+  return { g, head, handle };
 })();
 
-function pick(clientX, clientY) {
-  const ndc = new THREE.Vector2((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
-  raycaster.setFromCamera(ndc, camera);
-  const hit = raycaster.intersectObjects(pickables, true)[0];
-  if (hit && hit.object === gravel.mesh) return hit.point;
-  return null;
-}
-
+const _a = new THREE.Vector3(), _b = new THREE.Vector3(), _up = new THREE.Vector3(0, 1, 0);
 function updateRake(dt) {
-  if (!raking) { rakeGhost.visible = false; return 0; }
-  let moved = 0;
-  if (rake.active) {
-    // The rake head follows the pointer with a little weight, which smooths
-    // the line the way a real rake's drag does.
-    const k = Math.min(1, dt * 7);
-    const nx = rake.hx + (rake.tx - rake.hx) * k;
-    const nz = rake.hz + (rake.tz - rake.hz) * k;
-    const len = Math.hypot(nx - rake.hx, nz - rake.hz);
-    if (len > 0.004) {
-      const steps = Math.ceil(len / 0.012);
-      let ax = rake.hx, az = rake.hz, touched = 0;
-      for (let i = 1; i <= steps; i++) {
-        const bx = rake.hx + (nx - rake.hx) * (i / steps);
-        const bz = rake.hz + (nz - rake.hz) * (i / steps);
-        touched += gravel.rakeSegment(ax, az, bx, bz);
-        ax = bx; az = bz;
-      }
-      const ddx = (nx - rake.hx) / len, ddz = (nz - rake.hz) / len;
-      rake.dx += (ddx - rake.dx) * 0.5; rake.dz += (ddz - rake.dz) * 0.5;
-      const l = Math.hypot(rake.dx, rake.dz) || 1; rake.dx /= l; rake.dz /= l;
-      rake.hx = nx; rake.hz = nz;
-      moved = (len / Math.max(dt, 1e-3)) * (touched / steps);
-    }
+  if (!raking) { rakeModel.g.visible = false; rake.has = false; return 0; }
+  rake.down = (rake.mouse || keys.has('Space')) && me.rise > 0.5;
+  rake.lift += ((rake.down ? 0 : 0.14) - rake.lift) * Math.min(1, dt * 10);
+
+  // Head position: in front of your feet, across your view.
+  const fx = -Math.sin(me.yaw), fz = -Math.cos(me.yaw);
+  const nx = me.x + fx * REACH, nz = me.z + fz * REACH;
+  const ux = Math.cos(me.yaw), uz = -Math.sin(me.yaw);
+  let speed = 0;
+  if (rake.down && rake.lift < 0.03 && rake.has) {
+    const touched = gravel.rakeMove(rake.x, rake.z, rake.ux, rake.uz, nx, nz, ux, uz);
+    const half = ((RAKE_TINES - 1) / 2) * RAKE_SPACING;
+    const sweep = Math.hypot(nx - rake.x, nz - rake.z) + Math.abs(Math.asin(clamp(rake.ux * uz - rake.uz * ux, -1, 1))) * half;
+    speed = (sweep / Math.max(dt, 1e-3)) * touched;
   }
-  const showAt = rake.active || rake.hover;
-  rakeGhost.visible = showAt;
-  if (showAt) {
-    rakeGhost.position.set(rake.hx, 0, rake.hz);
-    // Bar across the direction of travel; the handle trails behind it.
-    let dx = rake.dx, dz = rake.dz;
-    if (!rake.active) { dx = rake.hx - camera.position.x; dz = rake.hz - camera.position.z; const l = Math.hypot(dx, dz) || 1; dx /= l; dz /= l; }
-    rakeGhost.rotation.y = Math.atan2(-dx, -dz);
-  }
-  return moved;
+  rake.x = nx; rake.z = nz; rake.ux = ux; rake.uz = uz; rake.has = true;
+
+  // Model: head on the ground (or just above it), handle up to your hands.
+  const gy = groundAt(nx, nz) + (islands.some((i) => islandDistance(i, nx, nz) < 0) ? 0.05 : 0);
+  rakeModel.g.visible = true;
+  rakeModel.head.position.set(nx, gy + rake.lift, nz);
+  rakeModel.head.rotation.set(0, me.yaw, 0);
+  const hands = _b.set(
+    me.x + fx * 0.32 + ux * 0.16,
+    camera.position.y - 0.62 + (1 - me.rise) * 0.2,
+    me.z + fz * 0.32 + uz * 0.16,
+  );
+  const foot = _a.set(nx, gy + rake.lift + 0.09, nz);
+  const dir = hands.clone().sub(foot);
+  const L = dir.length() + 0.25;
+  rakeModel.handle.position.copy(foot).addScaledVector(dir.normalize(), L / 2);
+  rakeModel.handle.quaternion.setFromUnitVectors(_up, dir);
+  rakeModel.handle.scale.set(1, L, 1);
+  renderer.shadowMap.needsUpdate = true; // the rake casts a moving shadow
+  return speed;
 }
 
 // ---------------------------------------------------------------------------
 // Counting the stones you can see
 // ---------------------------------------------------------------------------
 // Visibility is measured exactly as the eye sees it: the stones are drawn
-// from the eye in flat ID colours, wide enough to cover the whole garden,
-// and the distinct IDs that survive the depth test are counted.
+// from the eye in flat ID colours, in four directions so that nothing behind
+// you is missed, and the distinct IDs that survive the depth test are counted.
 let counting = params.has('count');
 const idScene = new THREE.Scene();
 idScene.background = new THREE.Color(0, 0, 0);
@@ -268,13 +335,13 @@ stoneMeshes.forEach((m, i) => {
   mat.color.setRGB(((i + 1) * 15) / 255, 0, 0, THREE.LinearSRGBColorSpace);
   idScene.add(new THREE.Mesh(m.geometry, mat));
 });
-const ID_W = 1280, ID_H = 1024;
-const idTarget = new THREE.WebGLRenderTarget(ID_W, ID_H, { depthBuffer: true });
-const idBuf = new Uint8Array(ID_W * ID_H * 4);
-const idCams = [-0.8, 0.8].map((yaw) => {
-  const c = new THREE.PerspectiveCamera(80, ID_W / ID_H, 0.05, 60);
+const ID_S = 720;
+const idTarget = new THREE.WebGLRenderTarget(ID_S, ID_S, { depthBuffer: true });
+const idBuf = new Uint8Array(ID_S * ID_S * 4);
+const idCams = [0, 0.5, 1, 1.5].map((q) => {
+  const c = new THREE.PerspectiveCamera(92, 1, 0.05, 60);
   c.rotation.order = 'YXZ';
-  c.rotation.set(-0.38, yaw, 0);
+  c.rotation.set(-0.62, q * Math.PI, 0);
   return c;
 });
 let visibleSet = new Set();
@@ -290,7 +357,7 @@ function measureVisible() {
     c.updateMatrixWorld();
     renderer.setRenderTarget(idTarget);
     renderer.render(idScene, c);
-    renderer.readRenderTargetPixels(idTarget, 0, 0, ID_W, ID_H, idBuf);
+    renderer.readRenderTargetPixels(idTarget, 0, 0, ID_S, ID_S, idBuf);
     for (let i = 0; i < idBuf.length; i += 4) {
       const v = idBuf[i];
       if (v) seen.add(Math.round(v / 15) - 1);
@@ -311,6 +378,7 @@ const dots = stoneMeshes.map(() => {
   return d;
 });
 
+const _v = new THREE.Vector3();
 function updateCount(now) {
   const wrap = $('count');
   if (!counting) { wrap.classList.remove('on'); dots.forEach((d) => d.classList.remove('on')); return; }
@@ -324,14 +392,15 @@ function updateCount(now) {
     $('count-words').textContent = `${WORDS[n]} stone${n === 1 ? '' : 's'}`;
   }
   wrap.classList.add('on');
-  const v = new THREE.Vector3();
   stoneMeshes.forEach((m, i) => {
     const d = dots[i];
     if (!visibleSet.has(i)) { d.classList.remove('on'); return; }
-    v.copy(m.userData.top); v.y += 0.18;
-    v.project(camera);
-    if (v.z > 1 || Math.abs(v.x) > 1.05 || Math.abs(v.y) > 1.05) { d.classList.remove('on'); return; }
-    d.style.transform = `translate(${(v.x * 0.5 + 0.5) * window.innerWidth}px, ${(-v.y * 0.5 + 0.5) * window.innerHeight}px)`;
+    _v.copy(m.userData.top); _v.y += 0.18;
+    // Skip stones behind you.
+    if (_v.clone().applyMatrix4(camera.matrixWorldInverse).z > -0.1) { d.classList.remove('on'); return; }
+    _v.project(camera);
+    if (Math.abs(_v.x) > 1.05 || Math.abs(_v.y) > 1.05) { d.classList.remove('on'); return; }
+    d.style.transform = `translate(${(_v.x * 0.5 + 0.5) * window.innerWidth}px, ${(-_v.y * 0.5 + 0.5) * window.innerHeight}px)`;
     d.classList.add('on');
   });
 }
@@ -361,6 +430,7 @@ function wake() {
 }
 
 function refreshButtons() {
+  $('b-sit').textContent = me.seated ? 'Stand' : 'Sit';
   $('b-rake').classList.toggle('active', raking);
   $('b-count').classList.toggle('active', counting);
   $('b-sound').classList.toggle('active', sound.enabled);
@@ -369,10 +439,13 @@ function refreshButtons() {
 }
 
 const actions = {
+  sit,
   rake() {
     raking = !raking;
-    rake.active = false; rake.hover = false;
-    toast(raking ? 'Raking · drag across the gravel' : 'Sitting');
+    rake.mouse = false; rake.has = false;
+    // Glance down at the rake when you take it up.
+    if (raking) me.pitchT = Math.min(me.pitchT, -0.5);
+    toast(raking ? 'Hold the mouse button or space to lower the rake, then walk' : 'The rake is put away');
     refreshButtons();
   },
   count() {
@@ -394,7 +467,11 @@ const actions = {
     gravel.beginRestore();
     toast('The garden is raked anew');
   },
-  help() { $('help').classList.toggle('on'); },
+  help() {
+    const on = $('help').classList.toggle('on');
+    // Free the pointer while the help is open, so it can be read and closed.
+    if (on) unlockPointer(); else lockPointer();
+  },
   fullscreen() {
     if (document.fullscreenElement) document.exitFullscreen();
     else document.documentElement.requestFullscreen?.();
@@ -407,94 +484,106 @@ document.querySelectorAll('[data-action]').forEach((b) => {
 
 function begin() {
   $('intro').classList.add('gone');
+  document.body.classList.add('begun');
   sound.start();
   wake();
+  lockPointer();
 }
 $('enter').addEventListener('click', begin);
 
+const KEYMAP = { KeyC: 'sit', KeyR: 'rake', KeyT: 'count', KeyL: 'light', KeyM: 'sound', KeyN: 'anew', KeyF: 'fullscreen', Slash: 'help', KeyH: 'help' };
 window.addEventListener('keydown', (e) => {
   if (e.metaKey || e.ctrlKey || e.altKey) return;
   wake();
   if (!$('intro').classList.contains('gone')) {
-    if (e.code === 'Enter' || e.code === 'Space') begin();
+    if (e.code === 'Enter' || e.code === 'Space') { e.preventDefault(); begin(); }
     return;
   }
   keys.add(e.code);
-  const map = { KeyR: 'rake', KeyC: 'count', KeyL: 'light', KeyM: 'sound', KeyN: 'anew', KeyF: 'fullscreen', Slash: 'help', KeyH: 'help' };
-  if (map[e.code] && !e.repeat) {
+  if (KEYMAP[e.code] && !e.repeat) {
     if (e.code === 'KeyN' && !raking) return;
-    actions[map[e.code]]();
+    actions[KEYMAP[e.code]]();
   }
   if (e.code === 'Escape') {
     if ($('help').classList.contains('on')) $('help').classList.remove('on');
     else if (raking) actions.rake();
   }
-  if (e.code.startsWith('Arrow')) e.preventDefault();
+  if (e.code.startsWith('Arrow') || e.code === 'Space') e.preventDefault();
 });
 window.addEventListener('keyup', (e) => keys.delete(e.code));
-window.addEventListener('blur', () => keys.clear());
+window.addEventListener('blur', () => { keys.clear(); rake.mouse = false; });
 
-// Pointer: look around, or rake when the rake is in hand.
+// Looking. With a mouse, the garden captures the pointer once you sit down,
+// so simply moving the mouse turns your head: right turns right, forward
+// looks up. Esc releases the pointer (browsers insist on that); a click on
+// the garden captures it again. With the rake in hand, holding the button
+// lowers it into the gravel. Touch screens drag to look instead.
+const MOUSE = 0.0022;   // radians per pixel of mouse movement
+const canLock = 'requestPointerLock' in canvas && !window.matchMedia('(pointer: coarse)').matches;
+let locked = false, lockedAt = 0;
+function lockPointer() {
+  if (!canLock || locked || !$('intro').classList.contains('gone')) return;
+  try {
+    const r = canvas.requestPointerLock();
+    if (r && r.catch) r.catch(() => {});
+  } catch { /* not allowed right now; the hint stays up */ }
+}
+function unlockPointer() { if (locked) document.exitPointerLock(); }
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === canvas;
+  lockedAt = performance.now();
+  document.body.classList.toggle('locked', locked);
+  if (!locked) rake.mouse = false;
+});
+document.addEventListener('mousemove', (e) => {
+  if (!locked) return;
+  wake();
+  // Browsers can report one spurious jump just after capturing the pointer:
+  // ignore movement for a moment, and clamp anything implausibly large.
+  if (performance.now() - lockedAt < 150) return;
+  me.yawT -= clamp(e.movementX, -200, 200) * MOUSE;
+  me.pitchT -= clamp(e.movementY, -200, 200) * MOUSE;
+});
+
 let drag = null;
 canvas.addEventListener('pointerdown', (e) => {
   wake();
-  canvas.setPointerCapture(e.pointerId);
-  if (raking && e.button === 0) {
-    const p = pick(e.clientX, e.clientY);
-    if (p) {
-      rake.active = true;
-      rake.tx = rake.hx = p.x; rake.tz = rake.hz = p.z;
-      drag = { mode: 'rake', id: e.pointerId };
-      return;
-    }
+  if (e.pointerType === 'mouse' && canLock) {
+    if (!locked) { lockPointer(); return; }          // this click only re-captures
+    if (raking && e.button === 0) rake.mouse = true;
+    return;
   }
-  drag = { mode: 'look', id: e.pointerId, x: e.clientX, y: e.clientY };
+  // Touch (or no pointer capture available): drag to look.
+  canvas.setPointerCapture(e.pointerId);
+  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, touch: e.pointerType !== 'mouse' };
+  if (raking && (e.button === 0 || e.pointerType === 'touch')) rake.mouse = true;
   document.body.classList.add('grabbing');
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (!drag || drag.id !== e.pointerId) return;
   wake();
-  if (drag && drag.id === e.pointerId && drag.mode === 'look') {
-    const k = 2.2 / window.innerHeight;
-    me.yawT += (e.clientX - drag.x) * k;
-    me.pitchT += (e.clientY - drag.y) * k;
-    drag.x = e.clientX; drag.y = e.clientY;
-    return;
-  }
-  if (raking) {
-    const p = pick(e.clientX, e.clientY);
-    if (drag && drag.mode === 'rake') {
-      if (p) { rake.tx = p.x; rake.tz = p.z; }
-    } else {
-      rake.hover = !!p;
-      if (p) { rake.hx = p.x; rake.hz = p.z; }
-    }
-  }
+  // A finger drags the scene; a mouse turns the head, as when captured.
+  const k = (drag.touch ? 1 : -1) * 2.2 / window.innerHeight;
+  me.yawT += (e.clientX - drag.x) * k;
+  me.pitchT += (e.clientY - drag.y) * k;
+  drag.x = e.clientX; drag.y = e.clientY;
 });
 const endDrag = (e) => {
+  if (e.pointerType === 'mouse' && locked) { if (e.button === 0) rake.mouse = false; return; }
   if (drag && drag.id === e.pointerId) {
-    if (drag.mode === 'rake') rake.active = false;
     drag = null;
+    rake.mouse = false;
     document.body.classList.remove('grabbing');
   }
 };
 canvas.addEventListener('pointerup', endDrag);
 canvas.addEventListener('pointercancel', endDrag);
-canvas.addEventListener('pointerleave', () => { if (!drag) rake.hover = false; });
 
-// Scrolling walks along the veranda.
-window.addEventListener('wheel', (e) => {
-  wake();
-  const d = Math.abs(e.deltaX) > Math.abs(e.deltaY) ? e.deltaX : e.deltaY;
-  const scale = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? 400 : 1;
-  wheelV = clamp(wheelV + d * scale * 0.0022, -1.3, 1.3);
-  e.preventDefault();
-}, { passive: false });
-
-// Touch walking buttons.
-for (const [id, dir] of [['walk-l', -1], ['walk-r', 1]]) {
+// Touch d-pad.
+for (const [id, f, s] of [['pad-f', 1, 0], ['pad-b', -1, 0], ['pad-l', 0, -1], ['pad-r', 0, 1]]) {
   const el = $(id);
-  el.addEventListener('pointerdown', (e) => { e.stopPropagation(); el.setPointerCapture(e.pointerId); walkDir = dir; wake(); });
-  const stop = () => { walkDir = 0; };
+  el.addEventListener('pointerdown', (e) => { e.stopPropagation(); el.setPointerCapture(e.pointerId); pad.f = f; pad.s = s; wake(); });
+  const stop = () => { pad.f = 0; pad.s = 0; };
   el.addEventListener('pointerup', stop);
   el.addEventListener('pointercancel', stop);
 }
@@ -510,17 +599,18 @@ window.addEventListener('resize', () => {
 // ---------------------------------------------------------------------------
 setLight(lightName, false);
 refreshButtons();
-if (params.has('shot')) $('intro').classList.add('gone');
+if (params.has('shot')) { $('intro').classList.add('gone'); document.body.classList.add('begun'); }
 
 let last = performance.now();
 let lastSaved = 0;
 const stats = { ms: 0, tris: 0 };
 function frame(nowMs) {
-  const dt = Math.min(0.05, (nowMs - last) / 1000);
+  // The first frame's timestamp can precede `last`; never step backwards.
+  const dt = clamp((nowMs - last) / 1000, 0, 0.05);
   last = nowMs;
   const now = nowMs / 1000;
 
-  updateVisitor(dt, now);
+  updateVisitor(dt);
   if (lightName === 'kyoto' && now - lastKyotoUpdate > 30) {
     lastKyotoUpdate = now;
     lightTarget = computeLight();
@@ -536,10 +626,14 @@ function frame(nowMs) {
   stats.tris = renderer.info.render.triangles;
 
   if (performance.now() - lastInput > 5000 && !drag) document.body.classList.add('still');
-  if (now - lastSaved > 2) { store.set('x', me.x.toFixed(2)); lastSaved = now; }
+  // Remember where along the veranda you were, to sit there next time.
+  if (now - lastSaved > 2) {
+    if (onVeranda(me.x, me.z)) store.set('x', clamp(me.x, VIEW.xMin, VIEW.xMax).toFixed(2));
+    lastSaved = now;
+  }
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__garden = { me, gravel, measureVisible, camera, actions, setLight, stats };
+window.__garden = { me, gravel, rake, measureVisible, camera, actions, setLight, stats, keys, sound };
 document.body.classList.add('ready');
 })(globalThis.RJ = globalThis.RJ || {});

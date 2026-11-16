@@ -56,8 +56,80 @@ class Soundscape {
     // A slight crackle: amplitude-modulate with fast noise.
     rake.connect(rakeBP).connect(rakeHP).connect(this.rakeGain).connect(this.master);
 
+    this._buildSteps();
+
     this.gust = 0;
     this.nextBell = ctx.currentTime + 40 + Math.random() * 60;
+  }
+
+  // Footsteps. Gravel is many small stones shifting under the foot: a dense
+  // burst of tiny clicks at the heel, then a lighter one as weight rolls onto
+  // the toe. Each variant is generated once; playback varies pitch and level.
+  _buildSteps() {
+    const ctx = this.ctx, sr = ctx.sampleRate;
+    const crunch = () => {
+      const len = Math.floor(sr * 0.34);
+      const buf = ctx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      const phases = [[0.0, 0.07, 1.0, 140], [0.11, 0.12, 0.55, 90]]; // start, spread, level, grains
+      for (const [start, spread, level, count] of phases) {
+        for (let g = 0; g < count; g++) {
+          const t0 = start + Math.pow(Math.random(), 1.6) * spread;
+          const at = Math.floor(t0 * sr);
+          const dur = Math.floor(sr * (0.0006 + Math.random() * 0.004));
+          const amp = level * Math.pow(Math.random(), 2.2) * (1 - (t0 - start) / (spread * 1.6));
+          const ring = 0.2 + Math.random() * 0.6;
+          for (let i = 0; i < dur && at + i < len; i++) {
+            d[at + i] += amp * (Math.random() * 2 - 1) * Math.exp(-i / (dur * ring));
+          }
+        }
+      }
+      // A soft low thud as the weight lands.
+      for (let i = 0; i < len; i++) {
+        const t = i / sr;
+        d[i] += 0.18 * Math.sin(2 * Math.PI * 70 * t) * Math.exp(-t / 0.035);
+      }
+      return buf;
+    };
+    const knock = () => {
+      const len = Math.floor(sr * 0.2);
+      const buf = ctx.createBuffer(1, len, sr);
+      const d = buf.getChannelData(0);
+      const f = 120 + Math.random() * 40;
+      for (let i = 0; i < len; i++) {
+        const t = i / sr;
+        d[i] = 0.6 * Math.sin(2 * Math.PI * f * t) * Math.exp(-t / 0.045)
+             + 0.25 * (Math.random() * 2 - 1) * Math.exp(-t / 0.008);
+      }
+      return buf;
+    };
+    this.steps = { gravel: Array.from({ length: 8 }, crunch), wood: Array.from({ length: 4 }, knock) };
+    this.stepSide = 1;
+  }
+
+  step(surface = 'gravel', weight = 1) {
+    if (!this.ctx || !this.steps) return;
+    const ctx = this.ctx, t = ctx.currentTime;
+    const list = this.steps[surface] ?? this.steps.gravel;
+    const src = ctx.createBufferSource();
+    src.buffer = list[Math.floor(Math.random() * list.length)];
+    src.playbackRate.value = 0.88 + Math.random() * 0.24;
+    const g = ctx.createGain();
+    g.gain.value = (surface === 'wood' ? 0.22 : 0.42) * weight * (0.8 + Math.random() * 0.3);
+    let node = src;
+    if (surface === 'gravel') {
+      const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 180;
+      const peak = ctx.createBiquadFilter(); peak.type = 'peaking'; peak.frequency.value = 2600 + Math.random() * 1200; peak.gain.value = 5; peak.Q.value = 0.8;
+      node.connect(hp); hp.connect(peak); node = peak;
+    } else {
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
+      node.connect(lp); node = lp;
+    }
+    this.stepSide = -this.stepSide;
+    const pan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    if (pan) { pan.pan.value = 0.12 * this.stepSide; node.connect(pan); node = pan; }
+    node.connect(g).connect(this.master);
+    src.start(t);
   }
 
   setEnabled(on) {

@@ -170,44 +170,95 @@ class Gravel {
     return x > 0 && x < GARDEN.width && z < 0 && z > -GARDEN.depth;
   }
 
-  // Draw one rake stroke segment from a to b (world xz). Returns the
-  // fraction of the rake that actually touched gravel (for the sound).
-  rakeSegment(ax, az, bx, bz) {
+  // Drag the rake from one pose to the next. A pose is the head's centre
+  // (x, z) and the direction of its bar (ux, uz), in world units. Each tine
+  // cuts its own groove along its own path, so walking straight gives
+  // parallel lines and turning on the spot sweeps concentric arcs.
+  // Returns the fraction of the rake that touched gravel (for the sound).
+  rakeMove(ax, az, aux, auz, bx, bz, bux, buz) {
+    const dist = Math.hypot(bx - ax, bz - az);
+    // The outer tines travel furthest when turning; keep every step short.
+    const half = ((RAKE_TINES - 1) / 2) * RAKE_SPACING;
+    const turn = Math.abs(Math.atan2(aux * buz - auz * bux, aux * bux + auz * buz)) * half;
+    const steps = Math.max(1, Math.ceil((dist + turn) / 0.012));
+    const a0 = Math.atan2(auz, aux), a1 = a0 + Math.atan2(aux * buz - auz * bux, aux * bux + auz * buz);
+    let touched = 0;
+    let px = ax, pz = az, pux = aux, puz = auz;
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const ang = a0 + (a1 - a0) * t;
+      const qx = ax + (bx - ax) * t, qz = az + (bz - az) * t;
+      const qux = Math.cos(ang), quz = Math.sin(ang);
+      touched += this._stampTines(px, pz, pux, puz, qx, qz, qux, quz);
+      px = qx; pz = qz; pux = qux; puz = quz;
+    }
+    return touched / steps;
+  }
+
+  _stampTines(ax, az, aux, auz, bx, bz, bux, buz) {
     const { W, H } = this;
-    const [pax, paz] = this.toPixel(ax, az);
-    const [pbx, pbz] = this.toPixel(bx, bz);
-    let tx = pbx - pax, tz = pbz - paz;
-    const len = Math.hypot(tx, tz);
-    if (len < 0.5) return 0;
-    tx /= len; tz /= len;
-    const nx = -tz, nz = tx;
-    const halfW = (RAKE_TINES * RAKE_SPACING * PX) / 2;
-    const ext = 1.0; // px of overlap with the previous segment
-    const i0 = Math.max(0, Math.floor(Math.min(pax, pbx) - halfW - 2));
-    const i1 = Math.min(W - 1, Math.ceil(Math.max(pax, pbx) + halfW + 2));
-    const j0 = Math.max(0, Math.floor(Math.min(paz, pbz) - halfW - 2));
-    const j1 = Math.min(H - 1, Math.ceil(Math.max(paz, pbz) + halfW + 2));
+    const s = RAKE_SPACING * PX;              // tine spacing in pixels
+    const n = RAKE_TINES, mid = (n - 1) / 2;
+    // Tine endpoints in pixel space.
+    const A = [], B = [];
+    for (let k = 0; k < n; k++) {
+      const o = (k - mid) * RAKE_SPACING;
+      A.push([(ax + aux * o) * PX, -(az + auz * o) * PX]);
+      B.push([(bx + bux * o) * PX, -(bz + buz * o) * PX]);
+    }
+    let i0 = Infinity, i1 = -Infinity, j0 = Infinity, j1 = -Infinity;
+    for (const [x, y] of [...A, ...B]) {
+      i0 = Math.min(i0, x); i1 = Math.max(i1, x); j0 = Math.min(j0, y); j1 = Math.max(j1, y);
+    }
+    const pad = s * 0.55;
+    i0 = Math.max(0, Math.floor(i0 - pad)); i1 = Math.min(W - 1, Math.ceil(i1 + pad));
+    j0 = Math.max(0, Math.floor(j0 - pad)); j1 = Math.min(H - 1, Math.ceil(j1 + pad));
+    if (i0 > i1 || j0 > j1) return 0;
+
+    // Centre and bar direction (pixel space: z is flipped).
+    const cx = (A[mid | 0][0] + B[mid | 0][0]) / 2, cy = (A[mid | 0][1] + B[mid | 0][1]) / 2;
+    const ux = (aux + bux) / 2, uy = -(auz + buz) / 2;
+    const ul = Math.hypot(ux, uy) || 1;
+    const outerEdge = mid * s;
+
     let touched = 0, total = 0;
     for (let j = j0; j <= j1; j++) {
       for (let i = i0; i <= i1; i++) {
-        const rx = i + 0.5 - pax, rz = j + 0.5 - paz;
-        const s = rx * tx + rz * tz;
-        if (s < -ext || s > len + ext) continue;
-        const o = rx * nx + rz * nz;
-        const ao = Math.abs(o);
-        if (ao > halfW) continue;
+        const x = i + 0.5, y = j + 0.5;
+        // Distance to the nearest tine's path. Only pixels alongside a
+        // path count: rounded caps at the ends would overwrite the grooves
+        // the previous step has just cut. A pixel of overlap avoids seams.
+        let d2 = Infinity;
+        for (let t = 0; t < n; t++) {
+          const sx = A[t][0], sy = A[t][1];
+          const ex = B[t][0] - sx, ey = B[t][1] - sy;
+          const l2 = ex * ex + ey * ey;
+          let u = 0;
+          if (l2 > 1e-6) {
+            const l = Math.sqrt(l2);
+            u = ((x - sx) * ex + (y - sy) * ey) / l2;
+            if (u < -1 / l || u > 1 + 1 / l) continue;
+            u = u < 0 ? 0 : u > 1 ? 1 : u;
+          }
+          const dx = x - sx - ex * u, dy = y - sy - ey * u;
+          const dd = dx * dx + dy * dy;
+          if (dd < d2) d2 = dd;
+        }
+        const d = Math.sqrt(d2);
+        if (d > s * 0.5) continue;
         total++;
         const k = j * W + i;
-        const m = this.mask[k];
-        if (!m) continue;
+        if (!this.mask[k]) continue;
         touched++;
-        // Tine grooves at the centre and every spacing; ridges between.
-        const u = o / PX;
-        const p = 1 - Gravel.profile(u);
-        const v = this._value(p, k);
-        // Feather the outer edges of the rake into what was there.
-        const edge = Math.min(1, (halfW - ao) / (0.6 * RAKE_SPACING * PX));
-        const w = edge * edge * (3 - 2 * edge);
+        // Groove under each tine, ridge half-way between tines.
+        const v = this._value(1 - Gravel.profile(d / PX), k);
+        // Outside the outermost tines, feather into what was there.
+        const along = Math.abs(((x - cx) * ux + (y - cy) * uy) / ul);
+        let w = 1;
+        if (along > outerEdge) {
+          const f = 1 - (d - s * 0.15) / (s * 0.35);
+          w = f <= 0 ? 0 : f >= 1 ? 1 : f * f * (3 - 2 * f);
+        }
         this.height[k] = Math.round(this.height[k] * (1 - w) + v * w);
       }
     }

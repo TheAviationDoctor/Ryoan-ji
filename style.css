@@ -11,10 +11,10 @@
 html, body { margin: 0; height: 100%; overflow: hidden; background: #0d0d0c; color: var(--paper); font-family: var(--sans); }
 body { -webkit-user-select: none; user-select: none; -webkit-font-smoothing: antialiased; }
 
-#garden { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: grab; touch-action: none; opacity: 0; transition: opacity 2.4s ease; }
+#garden { position: fixed; inset: 0; width: 100vw; height: 100vh; display: block; cursor: pointer; touch-action: none; opacity: 0; transition: opacity 2.4s ease; }
 body.ready #garden { opacity: 1; }
 body.grabbing #garden { cursor: grabbing; }
-body.raking #garden { cursor: crosshair; }
+body.locked #garden { cursor: none; }
 
 button { font: inherit; color: inherit; }
 kbd { font-family: var(--sans); font-size: 0.82em; border: 1px solid var(--line); border-radius: 3px; padding: 0 0.35em; }
@@ -59,7 +59,7 @@ kbd { font-family: var(--sans); font-size: 0.82em; border: 1px solid var(--line)
 #hud button.active { color: var(--ink); background: rgba(243, 238, 228, 0.82); border-color: transparent; }
 #b-sound:not(.active) { text-decoration: line-through; text-decoration-thickness: 1px; }
 #b-sound.active { color: var(--mute); background: rgba(20, 18, 16, 0.32); border-color: var(--line); }
-body.still #hud, body.still .walk { opacity: 0; }
+body.still #hud { opacity: 0; }
 body.still #garden { cursor: none; }
 
 #toast {
@@ -68,6 +68,17 @@ body.still #garden { cursor: none; }
   text-shadow: 0 1px 10px rgba(0, 0, 0, 0.7); opacity: 0; transition: opacity 1s ease; pointer-events: none; z-index: 6;
 }
 #toast.on { opacity: 1; }
+
+#lockhint {
+  position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%);
+  font-family: var(--serif); font-size: 0.95rem; letter-spacing: 0.12em; color: var(--paper);
+  padding: 0.5rem 1.2rem; background: rgba(20, 18, 16, 0.35); border: 1px solid var(--line); border-radius: 2px;
+  backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px);
+  opacity: 0; transition: opacity 0.6s ease; pointer-events: none; z-index: 4;
+}
+body.begun:not(.locked) #lockhint { opacity: 1; }
+body:has(#help.on) #lockhint { opacity: 0; }
+@media (pointer: coarse) { #lockhint { display: none; } }
 
 /* ---------------------------------------------------------------- count */
 #count {
@@ -103,16 +114,18 @@ body.still #garden { cursor: none; }
 #help button { background: none; border: 1px solid var(--line); border-radius: 2px; padding: 0.35rem 1.2rem; cursor: pointer; color: var(--mute); }
 
 /* ---------------------------------------------------------------- touch */
-.walk { display: none; }
+#pad { display: none; }
 @media (pointer: coarse) {
-  .walk {
-    display: block; position: fixed; top: 50%; transform: translateY(-50%); width: 3.2rem; height: 5.5rem;
-    background: rgba(20, 18, 16, 0.22); border: 1px solid var(--line); border-radius: 2px;
-    font-size: 1.8rem; color: var(--mute); z-index: 5; transition: opacity 1.6s ease; touch-action: none;
+  #pad {
+    display: grid; position: fixed; left: 1rem; bottom: 4.2rem; z-index: 5;
+    grid-template: repeat(3, 3rem) / repeat(3, 3rem); gap: 0.25rem; transition: opacity 1.6s ease;
   }
-  #walk-l { left: 0.8rem; }
-  #walk-r { right: 0.8rem; }
-  #count { right: 4.8rem; }
+  #pad button {
+    background: rgba(20, 18, 16, 0.25); border: 1px solid var(--line); border-radius: 2px;
+    color: var(--mute); font-size: 1.2rem; touch-action: none;
+  }
+  #pad-f { grid-area: 1 / 2; } #pad-l { grid-area: 2 / 1; } #pad-r { grid-area: 2 / 3; } #pad-b { grid-area: 3 / 2; }
+  body.still #pad { opacity: 0; }
   #help dl { grid-template-columns: 1fr; }
   #help dt { margin-top: 0.4rem; }
 }
