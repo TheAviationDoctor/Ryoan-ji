@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Ryōan-ji</title>
+  <meta name="description" content="The dry garden of Ryōan-ji, Kyoto: fifteen stones, and from anywhere on the veranda one of them is always hidden.">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 32 32%22%3E%3Crect width=%2232%22 height=%2232%22 fill=%22%23e8e2d6%22/%3E%3Cellipse cx=%2214%22 cy=%2219%22 rx=%228%22 ry=%225%22 fill=%22%23555%22/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <canvas id="garden" aria-label="The rock garden of Ryōan-ji, seen from the veranda"></canvas>
+
+  <div id="dots" aria-hidden="true"></div>
+
+  <section id="intro">
+    <div class="intro-inner">
+      <h1 class="kanji" lang="ja">龍安寺</h1>
+      <div class="intro-text">
+        <h2>Ryōan-ji</h2>
+        <p>A bed of raked white gravel, twenty-five metres by ten. Fifteen stones in five groups, set in moss.</p>
+        <p>Wherever you sit on the veranda, at least one stone is hidden behind the others. You never see the whole garden at once.</p>
+        <button id="enter" type="button">Sit</button>
+        <p class="hint">Drag to look · arrow keys or scroll to move along the veranda · <kbd>R</kbd> to rake</p>
+      </div>
+    </div>
+  </section>
+
+  <div id="toast" role="status" aria-live="polite"></div>
+
+  <div id="count" aria-live="polite">
+    <div id="count-kanji" lang="ja"></div>
+    <div id="count-words"></div>
+  </div>
+
+  <nav id="hud" aria-label="Garden controls">
+    <button id="b-rake" data-action="rake" type="button" title="Take up the rake (R)">Rake</button>
+    <button id="b-anew" data-action="anew" type="button" title="Rake the whole garden anew (N)" hidden>Anew</button>
+    <button id="b-count" data-action="count" type="button" title="Count the stones you can see (C)">Count</button>
+    <button id="b-light" data-action="light" type="button" title="Change the light (L)">Light</button>
+    <button id="b-sound" data-action="sound" type="button" title="Sound on or off (M)">Sound</button>
+    <button id="b-help" data-action="help" type="button" title="Help (?)">?</button>
+  </nav>
+
+  <button id="walk-l" class="walk" type="button" aria-label="Walk left">‹</button>
+  <button id="walk-r" class="walk" type="button" aria-label="Walk right">›</button>
+
+  <section id="help" aria-label="How to use">
+    <h3>Sitting at Ryōan-ji</h3>
+    <dl>
+      <dt>Look</dt><dd>Drag, or <kbd>↑</kbd> <kbd>↓</kbd></dd>
+      <dt>Move along the veranda</dt><dd><kbd>←</kbd> <kbd>→</kbd>, <kbd>A</kbd> <kbd>D</kbd>, or scroll. You rise to walk and sit again when you stop.</dd>
+      <dt>Rake</dt><dd><kbd>R</kbd>, then drag across the gravel. The rake will not cross the moss. <kbd>N</kbd> rakes the whole garden anew.</dd>
+      <dt>Count the stones</dt><dd><kbd>C</kbd> marks every stone visible from where you are, and counts them.</dd>
+      <dt>Light</dt><dd><kbd>L</kbd> moves through the day, ending with the real sun over Kyoto right now.</dd>
+      <dt>Sound</dt><dd><kbd>M</kbd></dd>
+      <dt>Full screen</dt><dd><kbd>F</kbd></dd>
+    </dl>
+    <p class="note">The stones are placed after the real garden's 5-2-3-2-3 grouping; positions are approximate. Their arrangement has been checked so that, as at Ryōan-ji, at least one is hidden from every point on the veranda, seated or standing.</p>
+    <button data-action="help" type="button">Close</button>
+  </section>
+
+  <!-- Plain scripts, loaded in order, so the page opens straight from disk. -->
+  <script src="vendor/three.min.js"></script>
+  <script src="src/noise.js"></script>
+  <script src="src/layout.js"></script>
+  <script src="src/stones.js"></script>
+  <script src="src/islands.js"></script>
+  <script src="src/sun.js"></script>
+  <script src="src/gravel.js"></script>
+  <script src="src/scene.js"></script>
+  <script src="src/audio.js"></script>
+  <script src="src/main.js"></script>
+</body>
+</html>
