@@ -1,6 +1,6 @@
 (function (RJ) {
 'use strict';
-const { GARDEN, VIEW, STONES, GROUP_COUNT, buildIslands, islandDistance, Gravel, RAKE_SPACING, RAKE_TINES, buildStoneMeshes, buildMoss, buildWalls, buildPebbles, buildVeranda, buildTrees, buildSky, seasonFor, solarPosition, skyDirection, lightAt, presetDate, PRESETS, PRESET_LABEL, kyotoClock, Soundscape } = RJ;
+const { GARDEN, VIEW, STONES, GROUP_COUNT, buildIslands, islandDistance, Gravel, RAKE_SPACING, RAKE_TINES, buildStoneMeshes, buildMoss, buildWalls, buildPebbles, buildVeranda, buildTrees, updateTrees, buildSky, seasonFor, solarPosition, skyDirection, lightAt, presetDate, PRESETS, PRESET_LABEL, kyotoClock, Soundscape } = RJ;
 
 const params = new URLSearchParams(location.search);
 const store = {
@@ -47,7 +47,8 @@ scene.add(buildPebbles());
 const veranda = buildVeranda();
 scene.add(veranda);
 const season = seasonFor();
-scene.add(buildTrees(season));
+const trees = buildTrees(season);
+scene.add(trees);
 const { sky, stars, uniforms: skyU } = buildSky();
 scene.add(sky, stars);
 
@@ -482,7 +483,33 @@ document.querySelectorAll('[data-action]').forEach((b) => {
   b.addEventListener('click', (e) => { e.stopPropagation(); actions[b.dataset.action](); wake(); });
 });
 
+// The time in Kyoto, on the opening screen.
+function updateClock() {
+  const now = new Date();
+  let time, date;
+  try {
+    time = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit', hourCycle: 'h23' }).format(now);
+    date = new Intl.DateTimeFormat('en-GB', { timeZone: 'Asia/Tokyo', weekday: 'long', day: 'numeric', month: 'long' }).format(now);
+  } catch {
+    time = kyotoClock(now); date = '';
+  }
+  const hour = Number(kyotoClock(now).slice(0, 2));
+  const el = solarPosition(now).elevation;
+  let phase;
+  if (el < -12) phase = 'night';
+  else if (el < -0.8) phase = hour < 12 ? 'dawn' : 'dusk';
+  else if (hour < 11) phase = 'morning';
+  else if (hour < 14) phase = 'midday';
+  else if (el < 8) phase = 'evening';
+  else phase = 'afternoon';
+  $('clock-time').textContent = time;
+  $('clock-rest').textContent = ['in Kyoto', date, phase].filter(Boolean).join(' · ');
+}
+updateClock();
+const clockTimer = setInterval(updateClock, 1000);
+
 function begin() {
+  clearInterval(clockTimer);
   $('intro').classList.add('gone');
   document.body.classList.add('begun');
   sound.start();
@@ -604,6 +631,7 @@ if (params.has('shot')) { $('intro').classList.add('gone'); document.body.classL
 let last = performance.now();
 let lastSaved = 0;
 const stats = { ms: 0, tris: 0 };
+const _sunDir = new THREE.Vector3();
 function frame(nowMs) {
   // The first frame's timestamp can precede `last`; never step backwards.
   const dt = clamp((nowMs - last) / 1000, 0, 0.05);
@@ -616,6 +644,9 @@ function frame(nowMs) {
     lightTarget = computeLight();
   }
   applyLight(dt);
+  camera.updateMatrixWorld();
+  camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
+  updateTrees(now, _sunDir.copy(sun.position).sub(sun.target.position).normalize(), sun.color, sun.intensity, camera);
   const rakeSpeed = updateRake(dt);
   gravel.update(dt);
   sound.update(dt, rakeSpeed);
@@ -634,6 +665,6 @@ function frame(nowMs) {
   requestAnimationFrame(frame);
 }
 requestAnimationFrame(frame);
-window.__garden = { me, gravel, rake, measureVisible, camera, actions, setLight, stats, keys, sound };
+window.__garden = { me, gravel, rake, trees, measureVisible, camera, actions, setLight, stats, keys, sound };
 document.body.classList.add('ready');
 })(globalThis.RJ = globalThis.RJ || {});

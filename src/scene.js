@@ -164,16 +164,21 @@ function wallTexture() {
   }, { repeat: false });
 }
 
-function tileTexture() {
+// The wall's cap is roofed with layered cypress bark (hiwada-buki), as
+// restored in 1977, not with tiles.
+function barkRoofTexture() {
+  const noise = makeNoise3(61);
   return canvasTexture(256, 256, (d, w, h) => {
     const rnd = mulberry32(3);
     for (let j = 0; j < h; j++) for (let i = 0; i < w; i++) {
       const k = (j * w + i) * 4;
-      // Rounded rib every 32 px (≈ 0.25 m of tile), courses every 64 px.
-      const rib = Math.abs(Math.sin((i / 32) * Math.PI));
-      const course = (j % 64) < 3 ? 0.55 : 1;
-      const v = (78 + 40 * rib) * course + (rnd() - 0.5) * 12;
-      put(d, k, v, v + 2, v + 6);
+      // Thin courses of bark laid along the wall, each slightly overlapping.
+      const course = (j % 16) / 16;
+      const lip = course > 0.86 ? 0.62 : 1 - 0.18 * course;
+      const fibre = 0.9 + 0.1 * noise(i * 0.35, j * 0.02, 0.5) + (rnd() - 0.5) * 0.12;
+      const weather = 0.85 + 0.15 * noise(i * 0.02, j * 0.05, 3.3);
+      const v = lip * fibre * weather;
+      put(d, k, 118 * v, 86 * v, 62 * v);
     }
   });
 }
@@ -225,7 +230,7 @@ function buildWall(material, roofMat, { x0, z0, x1, z1, h0, h1, uOffset }) {
   roofMesh.castShadow = true; roofMesh.receiveShadow = true;
   g.add(roofMesh);
   // Underside of the cap (dark), and the ridge.
-  const under = new THREE.Mesh(new THREE.BoxGeometry(L + 0.24, 0.09, T + 2 * over), new THREE.MeshStandardMaterial({ color: 0x4a4744, roughness: 0.9 }));
+  const under = new THREE.Mesh(new THREE.BoxGeometry(L + 0.24, 0.09, T + 2 * over), new THREE.MeshStandardMaterial({ color: 0x3a2a1e, roughness: 0.95 }));
   under.position.set(0, (h0 + h1) / 2 + 0.0, 0);
   under.scale.y = 1;
   // Slope the underside by shearing the vertices to follow the wall top.
@@ -248,7 +253,7 @@ function buildWall(material, roofMat, { x0, z0, x1, z1, h0, h1, uOffset }) {
   ridge.castShadow = true;
   g.add(ridge);
 
-  // Round eave tiles along both edges of the cap.
+  // The thick, rounded edge of the bark roofing along both sides of the cap.
   for (const side of [-1, 1]) {
     const eg = new THREE.CylinderGeometry(0.055, 0.055, L + 0.24, 10, 24);
     eg.rotateZ(Math.PI / 2);
@@ -279,8 +284,8 @@ function buildWalls() {
   const group = new THREE.Group();
   const tex = wallTexture();
   const mat = new THREE.MeshStandardMaterial({ map: tex, roughness: 0.97, metalness: 0 });
-  const tile = tileTexture();
-  const roofMat = new THREE.MeshStandardMaterial({ map: tile, roughness: 0.75, metalness: 0.05, color: 0xb8bcc4 });
+  const bark = barkRoofTexture();
+  const roofMat = new THREE.MeshStandardMaterial({ map: bark, roughness: 0.95, metalness: 0 });
   const T = 0.25;
   // South wall: it famously steps down in height towards the west.
   group.add(buildWall(mat, roofMat, { x0: -0.5, z0: -GARDEN.depth - T, x1: GARDEN.width + 0.5, z1: -GARDEN.depth - T, h0: 2.0, h1: 1.78, uOffset: 0 }));
@@ -478,7 +483,7 @@ function buildVeranda() {
 }
 
 // ---------------------------------------------------------------------------
-// Trees beyond the walls
+// Season (for the trees, in trees.js)
 // ---------------------------------------------------------------------------
 function seasonFor(now = new Date()) {
   const q = new URLSearchParams(location.search).get('season');
@@ -490,135 +495,6 @@ function seasonFor(now = new Date()) {
   if (md >= 1015 && md < 1105) return 'early-autumn';
   if (md > 1210 || md < 310) return 'winter';
   return 'summer';
-}
-
-const PALETTES = {
-  sakura:        { ever: [0x34492b, 0x3d5431, 0x2e4227], decid: [0x5f7f3a, 0x6f8c45, 0x557434], cherry: [0xe9c4cf, 0xf0d3db, 0xdcb0bd] },
-  summer:        { ever: [0x34492b, 0x3d5431, 0x2e4227], decid: [0x3f5f28, 0x4b6d2e, 0x365424], cherry: [0x3d5a26, 0x46652b, 0x355022] },
-  'early-autumn':{ ever: [0x34492b, 0x3d5431, 0x2e4227], decid: [0x7d7a2e, 0x9a6a26, 0x5c6c2a], cherry: [0x8a6a2c, 0x7a5a28, 0x6b6a2c] },
-  koyo:          { ever: [0x3b5030, 0x445a36, 0x34482b, 0x4c5e38], decid: [0x8a2e1c, 0xa04424, 0xb0662a, 0x6e3a1e, 0x7a6a2a], cherry: [0x7a4a2a, 0x6a4026, 0x86582e] },
-  winter:        { ever: [0x33452c, 0x3a4c31, 0x2c3c27], decid: [0x5a4c40, 0x4e443a, 0x635548], cherry: [0x54473d, 0x4b3f36, 0x5d5045] },
-};
-
-function blobGeometry() {
-  // An irregular, faceted lump of foliage.
-  const ico = icosphere(2);
-  const pos = new Float32Array(ico.positions);
-  const noise = makeNoise3(4);
-  for (let i = 0; i < pos.length; i += 3) {
-    const x = pos[i], y = pos[i + 1], z = pos[i + 2];
-    // Clumpy foliage: lumps of leaves with deep gaps between them.
-    const r = 1 + 0.30 * noise(x * 2.2, y * 2.2, z * 2.2) + 0.10 * noise(x * 4.5 + 2, y * 4.5, z * 4.5);
-    pos[i] = x * r; pos[i + 1] = y * r * 0.8; pos[i + 2] = z * r;
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
-  geo.setIndex(new THREE.BufferAttribute(ico.indices, 1));
-  geo.computeVertexNormals();
-  // Self-shading: the underside and the hollows of each clump are darker.
-  const col = new Float32Array(pos.length);
-  for (let i = 0; i < pos.length; i += 3) {
-    const x = pos[i], y = pos[i + 1], z = pos[i + 2];
-    const r = Math.hypot(x, y / 0.8, z);
-    const up = 0.5 + 0.5 * y / Math.max(r, 1e-3);
-    const hollow = smoothstep(0.75, 1.15, r);
-    const fleck = 0.85 + 0.3 * Math.abs(noise(x * 9 + 3, y * 9, z * 9));
-    const v = (0.38 + 0.62 * up) * (0.55 + 0.45 * hollow) * fleck;
-    col[i] = v; col[i + 1] = v; col[i + 2] = v;
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  return geo;
-}
-
-function buildTrees(season) {
-  const pal = PALETTES[season] ?? PALETTES.summer;
-  const rnd = mulberry32(1234);
-  const blobs = [];   // {x,y,z,s,color}
-  const trunks = [];  // {x,z,h,r}
-  const G = GARDEN;
-
-  const addTree = (x, z, h, spread, kind) => {
-    const colors = kind === 'ever' ? pal.ever : kind === 'cherry' ? pal.cherry : pal.decid;
-    trunks.push({ x, z, h: h * 0.75, r: 0.12 + h * 0.012 });
-    const n = kind === 'cherry' ? 48 : 12 + Math.floor(rnd() * 10);
-    const bare = season === 'winter' && kind !== 'ever';
-    for (let i = 0; i < n; i++) {
-      const a = rnd() * Math.PI * 2, rr = Math.sqrt(rnd()) * spread;
-      let y = h * (0.55 + rnd() * 0.45);
-      if (kind === 'cherry') {
-        // Weeping: blossoms fall in curtains from the crown.
-        y = h * (0.35 + rnd() * 0.65) - (rr / spread) * h * 0.25;
-      }
-      const s = (kind === 'ever' ? 1.05 : 0.95) * (0.55 + rnd() * 0.6) * (bare ? 0.5 : 1) * (0.7 + spread * 0.2);
-      blobs.push({ x: x + Math.cos(a) * rr, y, z: z + Math.sin(a) * rr * 0.8, s, color: colors[Math.floor(rnd() * colors.length)], bare, far: z < -19 || x > G.width + 4 || x < -4 });
-    }
-  };
-
-  // The famous weeping cherry over the south-west corner of the wall.
-  addTree(22.8, -11.6, 6.2, 3.0, 'cherry');
-  // Rows of trees behind the south wall: maples close, cedars and pines behind.
-  for (let x = -7; x < G.width + 8; x += 1.6 + rnd() * 1.6) {
-    if (Math.abs(x - 22.8) < 2.2) continue;
-    addTree(x, -11.3 - rnd() * 1.5, 4.5 + rnd() * 3.5, 1.6 + rnd() * 1.2, rnd() < 0.35 ? 'decid' : 'ever');
-  }
-  for (let x = -10; x < G.width + 12; x += 1.8 + rnd() * 2.0) {
-    addTree(x, -14 - rnd() * 4, 8 + rnd() * 7, 2.0 + rnd() * 1.5, rnd() < 0.8 ? 'ever' : 'decid');
-  }
-  for (let x = -14; x < G.width + 16; x += 3 + rnd() * 3) {
-    addTree(x, -20 - rnd() * 8, 12 + rnd() * 8, 3 + rnd() * 2, 'ever');
-  }
-  // West side.
-  for (let z = -10; z < 3; z += 1.7 + rnd() * 1.5) {
-    addTree(G.width + 1.4 + rnd() * 1.5, z, 4.5 + rnd() * 3.5, 1.5 + rnd(), rnd() < 0.3 ? 'decid' : 'ever');
-    addTree(G.width + 4.5 + rnd() * 4, z - 1, 8 + rnd() * 6, 2.2 + rnd(), 'ever');
-  }
-  // East side.
-  for (let z = -10; z < 3; z += 1.7 + rnd() * 1.5) {
-    addTree(-1.6 - rnd() * 1.5, z, 4.5 + rnd() * 3, 1.5 + rnd(), rnd() < 0.3 ? 'decid' : 'ever');
-    addTree(-5 - rnd() * 4, z - 1, 8 + rnd() * 6, 2.2 + rnd(), 'ever');
-  }
-
-  const group = new THREE.Group();
-  const geo = blobGeometry();
-  const mat = new THREE.MeshStandardMaterial({ roughness: 0.9, metalness: 0, vertexColors: true });
-  const m4 = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), c = new THREE.Color();
-  // The trees deliberately cast no shadows: with a low sun their shadows
-  // would cover the whole garden, and these simple canopies would let light
-  // through in hard-edged patches. The wall's long shadow is enough.
-  for (const far of [false, true]) {
-    const list = blobs.filter((b) => b.far === far);
-    const inst = new THREE.InstancedMesh(geo, mat, list.length);
-    list.forEach((b, i) => {
-      e.set(rnd() * 0.5, rnd() * 6.28, rnd() * 0.5);
-      q.setFromEuler(e);
-      m4.compose(new THREE.Vector3(b.x, b.y, b.z), q, new THREE.Vector3(b.s, b.s * (b.bare ? 1.2 : 0.8), b.s));
-      inst.setMatrixAt(i, m4);
-      c.setHex(b.color);
-      c.offsetHSL(0, 0, (rnd() - 0.5) * 0.04);
-      inst.setColorAt(i, c);
-    });
-    inst.castShadow = false;
-    inst.receiveShadow = !far;
-    group.add(inst);
-  }
-  group.userData.blobCount = blobs.length;
-
-  const trunkGeo = new THREE.CylinderGeometry(0.7, 1, 1, 7);
-  trunkGeo.translate(0, 0.5, 0);
-  const tinst = new THREE.InstancedMesh(trunkGeo, new THREE.MeshStandardMaterial({ color: 0x2e2620, roughness: 1 }), trunks.length);
-  trunks.forEach((t, i) => {
-    m4.compose(new THREE.Vector3(t.x, 0, t.z), new THREE.Quaternion(), new THREE.Vector3(t.r, t.h, t.r));
-    tinst.setMatrixAt(i, m4);
-  });
-  group.add(tinst);
-
-  // Ground beyond the walls.
-  const ground = new THREE.Mesh(new THREE.PlaneGeometry(160, 160), new THREE.MeshStandardMaterial({ color: 0x2a2c1e, roughness: 1 }));
-  ground.rotation.x = -Math.PI / 2;
-  ground.position.set(G.width / 2, -0.02, -G.depth / 2);
-  ground.receiveShadow = true;
-  group.add(ground);
-  return group;
 }
 
 // ---------------------------------------------------------------------------
@@ -666,5 +542,5 @@ function buildSky() {
   return { sky, stars, uniforms };
 }
 
-Object.assign(RJ, { buildStoneMeshes, buildMoss, buildWalls, buildPebbles, buildVeranda, seasonFor, buildTrees, buildSky });
+Object.assign(RJ, { buildStoneMeshes, buildMoss, buildWalls, buildPebbles, buildVeranda, seasonFor, buildSky });
 })(globalThis.RJ = globalThis.RJ || {});

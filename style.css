@@ -42,6 +42,11 @@ kbd { font-family: var(--sans); font-size: 0.82em; border: 1px solid var(--line)
   transition: background 0.4s;
 }
 #enter:hover, #enter:focus-visible { background: rgba(243, 238, 228, 0.2); outline: none; }
+.intro-text .clock {
+  font-family: var(--sans); font-size: 0.8rem; letter-spacing: 0.08em; color: var(--mute);
+  margin: -0.8rem 0 1.5rem;
+}
+#clock-time { font-family: var(--serif); font-size: 1.15rem; letter-spacing: 0.06em; color: var(--paper); margin-right: 0.35rem; font-variant-numeric: tabular-nums; }
 .hint { font-family: var(--sans) !important; font-size: 0.8rem !important; letter-spacing: 0.02em; }
 
 /* ---------------------------------------------------------------- HUD */
